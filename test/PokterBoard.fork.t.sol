@@ -14,8 +14,11 @@ contract PokterBoardForkTest is Test {
     /// @dev Holds an Agent ID and funded jobs 57067-57069, each completed with a delivery.
     address constant HOLDER = 0x7751bE7B2BA4141D5E32Ef14e9E5cc73e9D7bf0C;
     address constant PROVIDER_57067 = 0x81762d5214fCB6fB3b102beF9D69d13A56c1a2d0;
+    address constant PROVIDER_57068 = 0x7e91367c77E561F0d99C2B42925aF29cd90AE838;
     /// @dev Funded job 57206, completed; holds no Agent ID.
     address constant NON_HOLDER = 0xC5A17B5295Fc50BAdB1F9f9C09b412fE5e84F7d3;
+    /// @dev Funded job 57141, which lapsed with nothing delivered and was refunded.
+    address constant CLIENT_57141 = 0xdAb12cf15F4385188bE62bda9F00877AF4C1b32f;
 
     PokterBoard board;
 
@@ -42,19 +45,46 @@ contract PokterBoardForkTest is Test {
         assertEq(rejected.status, 4, "rejected");
         assertEq(rejected.submittedAt, 0, "with nothing delivered");
         assertEq(rejected.budget, 0.15 ether);
+
+        IAgenticCommerce.Job memory refunded = ESCROW.getJob(57141);
+        assertEq(refunded.client, CLIENT_57141);
+        assertEq(refunded.status, 5, "refunded after its deadline");
+        assertEq(refunded.submittedAt, 0, "with nothing delivered");
     }
 
     function test_aRealHolderReviewsARealJobItFunded() public {
         assertGt(AGENT_ID.balanceOf(HOLDER), 0);
         vm.prank(HOLDER);
         board.review(57067, 5, 0x0b, bytes32(0));
-        (uint64 reviews, uint64 stars) = board.ratingOf(PROVIDER_57067);
-        assertEq(reviews, 1);
+        (uint64 reviewers, uint64 stars) = board.ratingOf(PROVIDER_57067);
+        assertEq(reviewers, 1);
         assertEq(stars, 5);
 
         vm.prank(HOLDER);
         vm.expectRevert(PokterBoard.AlreadyReviewed.selector);
         board.review(57067, 1, 0, bytes32(0));
+    }
+
+    function test_aHoldersRatingsOfDifferentAgentsAreKeptApart() public {
+        vm.startPrank(HOLDER);
+        board.review(57067, 5, 0, bytes32(0));
+        board.review(57068, 2, 0, bytes32(0));
+        vm.stopPrank();
+        assertEq(board.ratingFrom(PROVIDER_57067, HOLDER), 5);
+        assertEq(board.ratingFrom(PROVIDER_57068, HOLDER), 2);
+        (uint64 reviewers, uint64 stars) = board.ratingOf(PROVIDER_57068);
+        assertEq(reviewers, 1);
+        assertEq(stars, 2);
+    }
+
+    function test_aRealRefundWithNothingDeliveredIsRefusedEvenFromAHolder() public {
+        // The escrow side is real; only the Agent ID check is stood in, as if this funder held one.
+        vm.mockCall(
+            address(AGENT_ID), abi.encodeWithSelector(IAgentId.balanceOf.selector, CLIENT_57141), abi.encode(uint256(1))
+        );
+        vm.prank(CLIENT_57141);
+        vm.expectRevert(PokterBoard.NothingDelivered.selector);
+        board.review(57141, 1, 0, bytes32(0));
     }
 
     function test_aFunderWithoutAnAgentIdCannotReview() public {

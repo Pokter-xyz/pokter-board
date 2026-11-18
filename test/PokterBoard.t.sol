@@ -65,7 +65,7 @@ contract PokterBoardTest is Test {
         address indexed reviewer,
         uint8 rating,
         uint8 flags,
-        bytes32 commentHash
+        bytes32 reviewHash
     );
     event RequestPosted(uint256 indexed requestId, address indexed poster, bytes32 briefHash, uint64 expiresAt);
     event RequestClosed(uint256 indexed requestId);
@@ -80,24 +80,67 @@ contract PokterBoardTest is Test {
 
     function test_aFundedBuyerReviewsACompletedJob() public {
         vm.expectEmit(address(board));
-        emit Reviewed(1, agent, buyer, 5, 0x0b, keccak256("fast and right"));
+        emit Reviewed(1, agent, buyer, 5, 0x0b, keccak256("review document"));
         vm.prank(buyer);
-        board.review(1, 5, 0x0b, keccak256("fast and right"));
+        board.review(1, 5, 0x0b, keccak256("review document"));
         assertTrue(board.reviewed(1));
-        (uint64 reviews, uint64 stars) = board.ratingOf(agent);
-        assertEq(reviews, 1);
+        assertEq(board.ratingFrom(agent, buyer), 5);
+        (uint64 reviewers, uint64 stars) = board.ratingOf(agent);
+        assertEq(reviewers, 1);
         assertEq(stars, 5);
     }
 
-    function test_ratingsAddUpAcrossJobs() public {
-        escrow.put(2, buyer, agent, PRICE, EXPIRED, 0);
+    function test_aHolderCountsOncePerAgentHoweverOftenTheyHire() public {
+        // Ten cheap hires from one person are still one person's opinion.
         vm.startPrank(buyer);
+        board.review(1, 5, 0, bytes32(0));
+        for (uint256 id = 2; id <= 10; id++) {
+            escrow.put(id, buyer, agent, PRICE, COMPLETED, 1_700_000_000 + id);
+            board.review(id, 5, 0, bytes32(0));
+        }
+        vm.stopPrank();
+        (uint64 reviewers, uint64 stars) = board.ratingOf(agent);
+        assertEq(reviewers, 1);
+        assertEq(stars, 5);
+    }
+
+    function test_aHoldersLatestReviewIsTheirRating() public {
+        escrow.put(2, buyer, agent, PRICE, REJECTED, 1_700_000_200);
+        vm.startPrank(buyer);
+        board.review(1, 5, 0, bytes32(0));
+        board.review(2, 2, 0, bytes32(0));
+        vm.stopPrank();
+        assertEq(board.ratingFrom(agent, buyer), 2);
+        (uint64 reviewers, uint64 stars) = board.ratingOf(agent);
+        assertEq(reviewers, 1);
+        assertEq(stars, 2);
+    }
+
+    function test_eachHolderCountsOnce() public {
+        address second = address(0xB1);
+        ids.give(second);
+        escrow.put(2, second, agent, PRICE, COMPLETED, 1_700_000_300);
+        vm.prank(buyer);
         board.review(1, 4, 0, bytes32(0));
+        vm.prank(second);
+        board.review(2, 2, 0, bytes32(0));
+        (uint64 reviewers, uint64 stars) = board.ratingOf(agent);
+        assertEq(reviewers, 2);
+        assertEq(stars, 6);
+    }
+
+    function test_aHoldersRatingsAreKeptPerAgent() public {
+        address otherAgent = address(0xA7);
+        escrow.put(2, buyer, otherAgent, PRICE, COMPLETED, 1_700_000_400);
+        vm.startPrank(buyer);
+        board.review(1, 5, 0, bytes32(0));
         board.review(2, 1, 0, bytes32(0));
         vm.stopPrank();
-        (uint64 reviews, uint64 stars) = board.ratingOf(agent);
-        assertEq(reviews, 2);
-        assertEq(stars, 5);
+        assertEq(board.ratingFrom(agent, buyer), 5);
+        assertEq(board.ratingFrom(otherAgent, buyer), 1);
+        (uint64 reviewers, uint64 stars) = board.ratingOf(otherAgent);
+        assertEq(reviewers, 1);
+        assertEq(stars, 1);
     }
 
     function test_onlyAnAgentIdHolderMayReview() public {
@@ -147,24 +190,29 @@ contract PokterBoardTest is Test {
         }
     }
 
-    function test_aRejectionCountsOnlyAfterADelivery() public {
-        // The client may reject an open job it never funded; that says nothing about the agent.
-        escrow.put(20, buyer, agent, PRICE, REJECTED, 0);
-        vm.prank(buyer);
-        vm.expectRevert(abi.encodeWithSelector(PokterBoard.JobNotEnded.selector, REJECTED));
-        board.review(20, 1, 0, bytes32(0));
-
-        escrow.put(21, buyer, agent, PRICE, REJECTED, 1_700_000_200);
-        vm.prank(buyer);
-        board.review(21, 1, 0, bytes32(0));
-        assertTrue(board.reviewed(21));
+    function test_aJobTheAgentNeverDeliveredToIsNotReviewable() public {
+        // A client can fund a job naming any agent, let it lapse and take the money back; the agent
+        // may never have seen it. A client can also reject an open job it never funded.
+        uint8[3] memory ended = [COMPLETED, REJECTED, EXPIRED];
+        for (uint256 i = 0; i < ended.length; i++) {
+            escrow.put(20 + i, buyer, agent, PRICE, ended[i], 0);
+            vm.prank(buyer);
+            vm.expectRevert(PokterBoard.NothingDelivered.selector);
+            board.review(20 + i, 1, 0, bytes32(0));
+        }
+        (uint64 reviewers,) = board.ratingOf(agent);
+        assertEq(reviewers, 0);
     }
 
-    function test_aMissedDeadlineIsReviewable() public {
-        escrow.put(22, buyer, agent, PRICE, EXPIRED, 0);
-        vm.prank(buyer);
-        board.review(22, 1, 0x0c, bytes32(0));
-        assertTrue(board.reviewed(22));
+    function test_aRejectionOrRefundAfterADeliveryIsReviewable() public {
+        escrow.put(23, buyer, agent, PRICE, REJECTED, 1_700_000_200);
+        escrow.put(24, buyer, address(0xA8), PRICE, EXPIRED, 1_700_000_300);
+        vm.startPrank(buyer);
+        board.review(23, 1, 0x00, bytes32(0));
+        board.review(24, 2, 0x0c, bytes32(0));
+        vm.stopPrank();
+        assertTrue(board.reviewed(23));
+        assertTrue(board.reviewed(24));
     }
 
     function testFuzz_starsAreOneToFive(uint8 rating) public {
@@ -187,6 +235,20 @@ contract PokterBoardTest is Test {
         } else {
             board.review(1, 3, flags, bytes32(0));
         }
+    }
+
+    function testFuzz_aRepeatBuyersRatingIsTheirLastReview(uint8[6] memory ratings) public {
+        vm.startPrank(buyer);
+        for (uint256 i = 0; i < ratings.length; i++) {
+            uint8 rating = uint8(bound(ratings[i], 1, 5));
+            uint256 id = 100 + i;
+            escrow.put(id, buyer, agent, PRICE, COMPLETED, 1_700_000_000 + id);
+            board.review(id, rating, 0, bytes32(0));
+            (uint64 reviewers, uint64 stars) = board.ratingOf(agent);
+            assertEq(reviewers, 1);
+            assertEq(stars, rating);
+        }
+        vm.stopPrank();
     }
 
     function test_aHolderPostsAndClosesARequest() public {

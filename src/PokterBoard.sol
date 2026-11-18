@@ -28,11 +28,14 @@ interface IAgenticCommerce {
 /// @title PokterBoard
 /// @notice Reviews and requests from Agent ID holders.
 ///
-/// A review is tied to an escrow job: only the wallet that funded the job may
-/// review it, once, after the job has ended, and only while it holds an Agent
-/// ID. Each Binance Wallet user can hold one Agent ID and cannot pass it on,
-/// so an agent's rating here comes from one buyer per review who paid for the
-/// work, and cannot be inflated by a crowd of fresh wallets.
+/// A review is the verdict of someone who paid an agent and got something back:
+/// only the wallet that funded an escrow job may review it, once, after the agent
+/// delivered and the job ended, and only while that wallet holds an Agent ID.
+///
+/// An Agent ID is one per Binance Wallet user and cannot be passed on, so each
+/// holder is one distinct person. An agent's rating counts each of them once:
+/// a holder's latest review of an agent is their rating of it, and hiring the
+/// agent again changes that rating rather than adding another.
 ///
 /// A request is a need an Agent ID holder posts for agents to answer: the brief
 /// itself lives off chain, and its hash binds the post to that text.
@@ -47,8 +50,10 @@ contract PokterBoard {
     /// @dev Bit 0: delivered as promised. Bit 1: would hire again. Bits 2-3: speed (0 not said, 1 early, 2 on time, 3 late).
     uint8 internal constant FLAGS_MASK = 0x0f;
 
+    /// @param reviewers Distinct Agent ID holders who have reviewed the agent.
+    /// @param stars The sum of each reviewer's current rating, so `stars / reviewers` is the average.
     struct Rating {
-        uint64 reviews;
+        uint64 reviewers;
         uint64 stars;
     }
 
@@ -63,8 +68,10 @@ contract PokterBoard {
 
     /// @notice Whether a job has been reviewed. A job has one funder, so one review.
     mapping(uint256 jobId => bool) public reviewed;
-    /// @notice Each provider wallet's review count and star total, for any contract to read.
+    /// @notice Each provider wallet's rating, for any contract to read.
     mapping(address provider => Rating) public ratingOf;
+    /// @notice A reviewer's current rating of a provider, 1 to 5, or 0 if they have not reviewed it.
+    mapping(address provider => mapping(address reviewer => uint8)) public ratingFrom;
 
     uint256 public requestCount;
     mapping(uint256 requestId => Request) public requests;
@@ -75,7 +82,7 @@ contract PokterBoard {
         address indexed reviewer,
         uint8 rating,
         uint8 flags,
-        bytes32 commentHash
+        bytes32 reviewHash
     );
     event RequestPosted(uint256 indexed requestId, address indexed poster, bytes32 briefHash, uint64 expiresAt);
     event RequestClosed(uint256 indexed requestId);
@@ -88,6 +95,7 @@ contract PokterBoard {
     error SelfReview();
     error UnpaidJob();
     error JobNotEnded(uint8 status);
+    error NothingDelivered();
     error EmptyBrief();
     error ExpiryNotInFuture();
     error NotRequestPoster();
@@ -103,11 +111,11 @@ contract PokterBoard {
         _;
     }
 
-    /// @notice Review a job you funded, once it has ended.
-    /// @param rating 1 to 5 stars.
+    /// @notice Review a job you funded, once the agent has delivered and the job has ended.
+    /// @param rating 1 to 5 stars. It becomes your rating of the agent, replacing any earlier one.
     /// @param flags See FLAGS_MASK; zero says nothing beyond the stars.
-    /// @param commentHash keccak256 of a written comment kept off chain, or zero for none.
-    function review(uint256 jobId, uint8 rating, uint8 flags, bytes32 commentHash) external onlyAgentIdHolder {
+    /// @param reviewHash keccak256 of the full review kept off chain, or zero for none.
+    function review(uint256 jobId, uint8 rating, uint8 flags, bytes32 reviewHash) external onlyAgentIdHolder {
         if (rating == 0 || rating > 5) revert RatingOutOfRange();
         if (flags & ~FLAGS_MASK != 0) revert FlagsOutOfRange();
         if (reviewed[jobId]) revert AlreadyReviewed();
@@ -116,13 +124,18 @@ contract PokterBoard {
         if (job.client != msg.sender) revert NotJobClient();
         if (job.provider == msg.sender) revert SelfReview();
         if (job.budget == 0) revert UnpaidJob();
-        if (!_ended(job)) revert JobNotEnded(job.status);
+        if (!_ended(job.status)) revert JobNotEnded(job.status);
+        // A client can name any provider and fund a job without its agreement, so a job the agent
+        // never delivered to may be one it never saw. A missed deadline stays on the escrow's own record.
+        if (job.submittedAt == 0) revert NothingDelivered();
 
         reviewed[jobId] = true;
         Rating storage stats = ratingOf[job.provider];
-        stats.reviews += 1;
-        stats.stars += rating;
-        emit Reviewed(jobId, job.provider, msg.sender, rating, flags, commentHash);
+        uint8 previous = ratingFrom[job.provider][msg.sender];
+        if (previous == 0) stats.reviewers += 1;
+        stats.stars = stats.stars - previous + rating;
+        ratingFrom[job.provider][msg.sender] = rating;
+        emit Reviewed(jobId, job.provider, msg.sender, rating, flags, reviewHash);
     }
 
     /// @notice Post a need for agents to answer. The brief is off chain; this binds the post to it.
@@ -145,10 +158,9 @@ contract PokterBoard {
         emit RequestClosed(requestId);
     }
 
-    /// @dev Settled, refunded after its deadline, or rejected after a delivery. A client can reject
-    /// an unfunded job it opened, so a rejection counts only once something was delivered.
-    function _ended(IAgenticCommerce.Job memory job) internal pure returns (bool) {
-        if (job.status == COMPLETED || job.status == EXPIRED) return true;
-        return job.status == REJECTED && job.submittedAt != 0;
+    /// @dev Settled, rejected by its evaluator, or refunded after its deadline. A client can also reject
+    /// an open job it never funded; `review` refuses that through its delivery check.
+    function _ended(uint8 status) internal pure returns (bool) {
+        return status == COMPLETED || status == REJECTED || status == EXPIRED;
     }
 }
