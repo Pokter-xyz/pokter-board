@@ -23,12 +23,12 @@ signed review from the buyer of each job it brokers, and lets the buyer publish 
 to the ERC-8004 reputation registry. PokterBoard is where that same review is
 recorded when the buyer holds an Agent ID:
 
-- **`reviewHash`** is the hash of the review document Pokter serves at
-  `https://pokter.xyz/api/reviews/56/{jobId}`. It is the same document whose hash
-  Pokter publishes to the reputation registry, so a review has one text wherever it
-  is recorded.
-- **`flags`** carry the review's other answers: delivered as promised, would hire
-  again, and speed.
+- **`flags`** carry the review's answers besides the stars: delivered as promised,
+  would hire again, and speed.
+- **`commentHash`** is keccak256 of the review's written comment. The text stays
+  off chain; anyone can attach it later, and Pokter shows it only if it hashes to
+  what the reviewer recorded. So a holder can review straight from their own
+  wallet or agent, with Pokter's site or without it.
 - **`ratingOf(provider)`** gives the number of distinct people who rated an agent,
   so Pokter can count distinct buyers, which a count of wallets cannot do.
 - **`briefHash`** on a request is the hash of the request its poster signed on
@@ -71,7 +71,7 @@ Pokter does can change what is recorded.
 
 | Function | Who | What |
 |---|---|---|
-| `review(jobId, rating, flags, reviewHash)` | the job's funder, holding an Agent ID | 1-5 stars, which become the caller's rating of the agent, replacing any earlier one. `flags`: bit 0 delivered as promised, bit 1 would hire again, bits 2-3 speed (0 not said, 1 early, 2 on time, 3 late). `reviewHash`: keccak256 of the full review kept off chain, or zero |
+| `review(jobId, rating, flags, commentHash)` | the job's funder, holding an Agent ID | 1-5 stars, which become the caller's rating of the agent, replacing any earlier one. `flags`: bit 0 delivered as promised, bit 1 would hire again, bits 2-3 speed (0 not said, 1 early, 2 on time, 3 late). `commentHash`: keccak256 of the comment's UTF-8 text, kept off chain, or zero |
 | `ratingOf(provider)` | anyone | `reviewers`, the distinct holders who rated the agent, and `stars`, the sum of their current ratings |
 | `ratingFrom(provider, reviewer)` | anyone | one holder's current rating of an agent, or 0 |
 | `reviewed(jobId)` | anyone | whether a job has been reviewed |

@@ -82,7 +82,7 @@ contract PokterBoard {
         address indexed reviewer,
         uint8 rating,
         uint8 flags,
-        bytes32 reviewHash
+        bytes32 commentHash
     );
     event RequestPosted(uint256 indexed requestId, address indexed poster, bytes32 briefHash, uint64 expiresAt);
     event RequestClosed(uint256 indexed requestId);
@@ -114,8 +114,9 @@ contract PokterBoard {
     /// @notice Review a job you funded, once the agent has delivered and the job has ended.
     /// @param rating 1 to 5 stars. It becomes your rating of the agent, replacing any earlier one.
     /// @param flags See FLAGS_MASK; zero says nothing beyond the stars.
-    /// @param reviewHash keccak256 of the full review kept off chain, or zero for none.
-    function review(uint256 jobId, uint8 rating, uint8 flags, bytes32 reviewHash) external onlyAgentIdHolder {
+    /// @param commentHash keccak256 of the written comment's UTF-8 text, kept off chain, or zero for none.
+    /// The rating and flags are here; the hash lets anyone attach the text later and prove it is the reviewer's.
+    function review(uint256 jobId, uint8 rating, uint8 flags, bytes32 commentHash) external onlyAgentIdHolder {
         if (rating == 0 || rating > 5) revert RatingOutOfRange();
         if (flags & ~FLAGS_MASK != 0) revert FlagsOutOfRange();
         if (reviewed[jobId]) revert AlreadyReviewed();
@@ -135,7 +136,7 @@ contract PokterBoard {
         if (previous == 0) stats.reviewers += 1;
         stats.stars = stats.stars - previous + rating;
         ratingFrom[job.provider][msg.sender] = rating;
-        emit Reviewed(jobId, job.provider, msg.sender, rating, flags, reviewHash);
+        emit Reviewed(jobId, job.provider, msg.sender, rating, flags, commentHash);
     }
 
     /// @notice Post a need for agents to answer. The brief is off chain; this binds the post to it.

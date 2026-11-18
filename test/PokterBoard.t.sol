@@ -65,7 +65,7 @@ contract PokterBoardTest is Test {
         address indexed reviewer,
         uint8 rating,
         uint8 flags,
-        bytes32 reviewHash
+        bytes32 commentHash
     );
     event RequestPosted(uint256 indexed requestId, address indexed poster, bytes32 briefHash, uint64 expiresAt);
     event RequestClosed(uint256 indexed requestId);
@@ -80,9 +80,9 @@ contract PokterBoardTest is Test {
 
     function test_aFundedBuyerReviewsACompletedJob() public {
         vm.expectEmit(address(board));
-        emit Reviewed(1, agent, buyer, 5, 0x0b, keccak256("review document"));
+        emit Reviewed(1, agent, buyer, 5, 0x0b, keccak256("Fast and right."));
         vm.prank(buyer);
-        board.review(1, 5, 0x0b, keccak256("review document"));
+        board.review(1, 5, 0x0b, keccak256("Fast and right."));
         assertTrue(board.reviewed(1));
         assertEq(board.ratingFrom(agent, buyer), 5);
         (uint64 reviewers, uint64 stars) = board.ratingOf(agent);
