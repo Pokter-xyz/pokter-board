@@ -28,20 +28,36 @@ interface IAgenticCommerce {
 /// @title PokterBoard
 /// @notice Reviews and requests from Agent ID holders.
 ///
-/// A review is the verdict of someone who paid an agent and got something back:
-/// only the wallet that funded an escrow job may review it, once, after the agent
-/// delivered and the job ended, and only while that wallet holds an Agent ID.
+/// A review is the verdict of someone who funded an agent's work, received a
+/// delivery, and either paid for it or won a dispute over it: only the wallet that
+/// funded an escrow job may review it, once, and only while that wallet holds an
+/// Agent ID. The job must have been settled to the agent, or rejected by the
+/// escrow router's dispute policy. A job its funder took back (refunded after the
+/// deadline, or rejected by a client that named itself evaluator) is not reviewable:
+/// either way the funder got their money back with nobody deciding against the agent.
 ///
 /// An Agent ID is one per Binance Wallet user and cannot be passed on, so each
-/// holder is one distinct person. An agent's rating counts each of them once:
-/// a holder's latest review of an agent is their rating of it, and hiring the
-/// agent again changes that rating rather than adding another.
+/// holder is one distinct person. A rating belongs to the job's provider wallet:
+/// each holder counts once per wallet, and a holder's latest review of a wallet is
+/// their rating of it, replacing any earlier one. Agents that share a provider
+/// wallet share a rating, so a reader should attribute it to an agent only when
+/// that agent is the wallet's only one.
 ///
 /// A request is a need an Agent ID holder posts for agents to answer: the brief
-/// itself lives off chain, and its hash binds the post to that text.
+/// itself lives off chain, and its hash binds the post to that text. Requests are
+/// advisory: their expiry is not enforced, and a holder may post any number.
 ///
 /// The contract has no owner and no admin. It holds no funds and moves no
 /// tokens: it reads the escrow and the Agent ID registry, and records.
+///
+/// What it trusts, which it cannot check:
+/// - The ERC-8183 escrow and its router are upgradeable proxies, pausable, owned by
+///   a 2-of-3 Safe that also chooses the payment tokens. An upgrade could change what
+///   `getJob` returns; one that changes the job layout would leave this board unable
+///   to read jobs, and a new board would be needed, with no ratings carried over.
+/// - The Agent ID registry is not upgradeable, but its owner, a single wallet, can
+///   register an ID to any address and replace the signer that approves new IDs.
+/// - "Funded" has no minimum: a job of any non-zero budget qualifies.
 contract PokterBoard {
     uint8 internal constant COMPLETED = 3;
     uint8 internal constant REJECTED = 4;
@@ -65,6 +81,9 @@ contract PokterBoard {
 
     IAgentId public immutable agentId;
     IAgenticCommerce public immutable escrow;
+    /// @notice The escrow's router: the evaluator on jobs hired through BNB's agent stack, whose dispute
+    /// policy decides a rejection. A rejection by any other evaluator, such as the client itself, is not a verdict.
+    address public immutable router;
 
     /// @notice Whether a job has been reviewed. A job has one funder, so one review.
     mapping(uint256 jobId => bool) public reviewed;
@@ -96,14 +115,17 @@ contract PokterBoard {
     error UnpaidJob();
     error JobNotEnded(uint8 status);
     error NothingDelivered();
+    error RefundedAfterDeadline();
+    error RejectedOutsidePolicy();
     error EmptyBrief();
     error ExpiryNotInFuture();
     error NotRequestPoster();
     error RequestAlreadyClosed();
 
-    constructor(IAgentId agentId_, IAgenticCommerce escrow_) {
+    constructor(IAgentId agentId_, IAgenticCommerce escrow_, address router_) {
         agentId = agentId_;
         escrow = escrow_;
+        router = router_;
     }
 
     modifier onlyAgentIdHolder() {
@@ -111,8 +133,8 @@ contract PokterBoard {
         _;
     }
 
-    /// @notice Review a job you funded, once the agent has delivered and the job has ended.
-    /// @param rating 1 to 5 stars. It becomes your rating of the agent, replacing any earlier one.
+    /// @notice Review a job you funded, once the agent has delivered and was paid, or lost a dispute decided by the router.
+    /// @param rating 1 to 5 stars. It becomes your rating of the job's provider wallet, replacing any earlier one.
     /// @param flags See FLAGS_MASK; zero says nothing beyond the stars.
     /// @param commentHash keccak256 of the written comment's UTF-8 text, kept off chain, or zero for none.
     /// The rating and flags are here; the hash lets anyone attach the text later and prove it is the reviewer's.
@@ -129,6 +151,11 @@ contract PokterBoard {
         // A client can name any provider and fund a job without its agreement, so a job the agent
         // never delivered to may be one it never saw. A missed deadline stays on the escrow's own record.
         if (job.submittedAt == 0) revert NothingDelivered();
+        // The funder took the money back with nobody deciding against the agent: after the deadline, any wallet
+        // may refund an unsettled job, and a client that named itself evaluator may reject a delivery it received.
+        // Either would let a holder review for the price of gas.
+        if (job.status == EXPIRED) revert RefundedAfterDeadline();
+        if (job.status == REJECTED && job.evaluator != router) revert RejectedOutsidePolicy();
 
         reviewed[jobId] = true;
         Rating storage stats = ratingOf[job.provider];
@@ -159,8 +186,9 @@ contract PokterBoard {
         emit RequestClosed(requestId);
     }
 
-    /// @dev Settled, rejected by its evaluator, or refunded after its deadline. A client can also reject
-    /// an open job it never funded; `review` refuses that through its delivery check.
+    /// @dev Settled, rejected by its evaluator, or refunded after its deadline: the job can no longer move. A client can
+    /// also reject an open job it never funded; `review` refuses that through its delivery check, and refuses a refund or
+    /// a rejection outside the router's policy after it.
     function _ended(uint8 status) internal pure returns (bool) {
         return status == COMPLETED || status == REJECTED || status == EXPIRED;
     }

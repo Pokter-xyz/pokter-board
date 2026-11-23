@@ -17,7 +17,15 @@ contract MockAgentId is IAgentId {
 }
 
 contract MockEscrow is IAgenticCommerce {
+    /// @dev The router's stand-in: every job names it as evaluator, as jobs hired through BNB's agent stack do.
+    address public constant ROUTER = address(0xE);
+
     mapping(uint256 => Job) internal jobs;
+
+    /// @dev A job whose evaluator is someone else, such as its own client.
+    function evaluatedBy(uint256 id, address evaluator) external {
+        jobs[id].evaluator = evaluator;
+    }
 
     function put(uint256 id, address client, address provider, uint256 budget, uint8 status, uint256 submittedAt)
         external
@@ -26,7 +34,7 @@ contract MockEscrow is IAgenticCommerce {
             id: id,
             client: client,
             provider: provider,
-            evaluator: address(0xE),
+            evaluator: ROUTER,
             description: '{"task":"a brief long enough to be a real one"}',
             budget: budget,
             expiredAt: 2_000_000_000,
@@ -73,7 +81,7 @@ contract PokterBoardTest is Test {
     function setUp() public {
         ids = new MockAgentId();
         escrow = new MockEscrow();
-        board = new PokterBoard(ids, escrow);
+        board = new PokterBoard(ids, escrow, escrow.ROUTER());
         ids.give(buyer);
         escrow.put(1, buyer, agent, PRICE, COMPLETED, 1_700_000_100);
     }
@@ -204,15 +212,52 @@ contract PokterBoardTest is Test {
         assertEq(reviewers, 0);
     }
 
-    function test_aRejectionOrRefundAfterADeliveryIsReviewable() public {
+    function test_aRejectionTheRoutersPolicyDecidedIsReviewable() public {
+        // A dispute upheld under the router's policy: the funder lost nothing, but somebody else decided.
         escrow.put(23, buyer, agent, PRICE, REJECTED, 1_700_000_200);
-        escrow.put(24, buyer, address(0xA8), PRICE, EXPIRED, 1_700_000_300);
-        vm.startPrank(buyer);
+        vm.prank(buyer);
         board.review(23, 1, 0x00, bytes32(0));
-        board.review(24, 2, 0x0c, bytes32(0));
-        vm.stopPrank();
         assertTrue(board.reviewed(23));
-        assertTrue(board.reviewed(24));
+        assertEq(board.ratingFrom(agent, buyer), 1);
+    }
+
+    function test_aDeliveryItsClientRejectedAsItsOwnEvaluatorIsNotReviewable() public {
+        // A client may name itself evaluator, take the delivery, reject it and be refunded in full.
+        escrow.put(24, buyer, agent, PRICE, REJECTED, 1_700_000_300);
+        escrow.evaluatedBy(24, buyer);
+        vm.prank(buyer);
+        vm.expectRevert(PokterBoard.RejectedOutsidePolicy.selector);
+        board.review(24, 1, 0, bytes32(0));
+        // Nor does any other evaluator's rejection count.
+        escrow.evaluatedBy(24, stranger);
+        vm.prank(buyer);
+        vm.expectRevert(PokterBoard.RejectedOutsidePolicy.selector);
+        board.review(24, 1, 0, bytes32(0));
+        (uint64 reviewers,) = board.ratingOf(agent);
+        assertEq(reviewers, 0);
+        assertFalse(board.reviewed(24));
+    }
+
+    function test_aRefundAfterTheDeadlineIsNotReviewableEvenAfterADelivery() public {
+        // Nobody settled a delivered job before its deadline, so its funder took the money back.
+        escrow.put(25, buyer, agent, PRICE, EXPIRED, 1_700_000_400);
+        vm.prank(buyer);
+        vm.expectRevert(PokterBoard.RefundedAfterDeadline.selector);
+        board.review(25, 1, 0, bytes32(0));
+        assertFalse(board.reviewed(25));
+    }
+
+    function test_aSettledJobIsReviewableWhoeverEvaluatedIt() public {
+        // A client that evaluated its own job and settled it paid the agent: that is a review from a payer.
+        escrow.put(26, buyer, agent, PRICE, COMPLETED, 1_700_000_500);
+        escrow.evaluatedBy(26, buyer);
+        vm.prank(buyer);
+        board.review(26, 4, 0, bytes32(0));
+        assertEq(board.ratingFrom(agent, buyer), 4);
+    }
+
+    function test_theRouterIsFixedAtDeployment() public view {
+        assertEq(board.router(), escrow.ROUTER());
     }
 
     function testFuzz_starsAreOneToFive(uint8 rating) public {

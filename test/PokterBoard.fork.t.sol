@@ -10,6 +10,7 @@ import {PokterBoard, IAgentId, IAgenticCommerce} from "../src/PokterBoard.sol";
 contract PokterBoardForkTest is Test {
     IAgentId constant AGENT_ID = IAgentId(0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F);
     IAgenticCommerce constant ESCROW = IAgenticCommerce(0xEa4DAa3100A767e86FDed867729ae7446476EBA6);
+    address constant ROUTER = 0x51895229E12F9876011789B04f8698af06cCD6DA;
 
     /// @dev Holds an Agent ID and funded jobs 57067-57069, each completed with a delivery.
     address constant HOLDER = 0x7751bE7B2BA4141D5E32Ef14e9E5cc73e9D7bf0C;
@@ -29,7 +30,7 @@ contract PokterBoardForkTest is Test {
             return;
         }
         vm.createSelectFork(rpc);
-        board = new PokterBoard(AGENT_ID, ESCROW);
+        board = new PokterBoard(AGENT_ID, ESCROW, ROUTER);
     }
 
     function test_theDeployedEscrowReturnsJobsInTheLayoutTheBoardReads() public view {
@@ -40,6 +41,7 @@ contract PokterBoardForkTest is Test {
         assertEq(job.budget, 0.01 ether);
         assertEq(job.status, 3, "completed");
         assertEq(job.submittedAt, 1792844269);
+        assertEq(job.evaluator, ROUTER, "jobs hired through BNB's agent stack name the router as evaluator");
 
         IAgenticCommerce.Job memory rejected = ESCROW.getJob(56879);
         assertEq(rejected.status, 4, "rejected");

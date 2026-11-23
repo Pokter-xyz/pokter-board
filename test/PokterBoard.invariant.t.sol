@@ -26,7 +26,7 @@ contract ReviewHandler is Test {
     function hireAndReview(uint256 holderSeed, uint256 agentSeed, uint8 statusSeed, uint8 ratingSeed) external {
         address holder = holders[holderSeed % holders.length];
         address agent = agents[agentSeed % agents.length];
-        uint8 status = uint8(3 + (statusSeed % 3)); // completed, rejected or expired
+        uint8 status = uint8(3 + (statusSeed % 2)); // settled, or rejected under the router's policy
         uint8 rating = uint8(bound(ratingSeed, 1, 5));
         uint256 jobId = nextJob++;
         escrow.put(jobId, holder, agent, 0.01 ether, status, 1_700_000_000 + jobId);
@@ -43,6 +43,21 @@ contract ReviewHandler is Test {
         escrow.put(jobId, holder, agent, 0.01 ether, 5, 0);
         vm.prank(holder);
         vm.expectRevert(PokterBoard.NothingDelivered.selector);
+        board.review(jobId, uint8(bound(ratingSeed, 1, 5)), 0, bytes32(0));
+    }
+
+    /// A holder takes a delivery's money back, refunded after the deadline or rejected as its own evaluator;
+    /// the review must be refused and change nothing.
+    function reviewTakenBack(uint256 holderSeed, uint256 agentSeed, bool selfRejected, uint8 ratingSeed) external {
+        address holder = holders[holderSeed % holders.length];
+        address agent = agents[agentSeed % agents.length];
+        uint256 jobId = nextJob++;
+        escrow.put(jobId, holder, agent, 0.01 ether, selfRejected ? 4 : 5, 1_700_000_000 + jobId);
+        if (selfRejected) escrow.evaluatedBy(jobId, holder);
+        vm.prank(holder);
+        vm.expectRevert(
+            selfRejected ? PokterBoard.RejectedOutsidePolicy.selector : PokterBoard.RefundedAfterDeadline.selector
+        );
         board.review(jobId, uint8(bound(ratingSeed, 1, 5)), 0, bytes32(0));
     }
 
@@ -64,7 +79,7 @@ contract PokterBoardInvariantTest is Test {
     function setUp() public {
         MockAgentId ids = new MockAgentId();
         MockEscrow escrow = new MockEscrow();
-        board = new PokterBoard(ids, escrow);
+        board = new PokterBoard(ids, escrow, escrow.ROUTER());
         handler = new ReviewHandler(board, escrow);
         for (uint256 i = 0; i < 3; i++) {
             ids.give(handler.holders(i));
