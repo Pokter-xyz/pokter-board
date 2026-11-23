@@ -50,7 +50,7 @@ Pokter does can change what is recorded.
 | Agent ID registry | [`0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F`](https://bscscan.com/address/0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F) |
 | ERC-8183 escrow | [`0xEa4DAa3100A767e86FDed867729ae7446476EBA6`](https://bscscan.com/address/0xEa4DAa3100A767e86FDed867729ae7446476EBA6) |
 | Escrow router (the evaluator whose policy decides a rejection) | [`0x51895229E12F9876011789B04f8698af06cCD6DA`](https://bscscan.com/address/0x51895229E12F9876011789B04f8698af06cCD6DA) |
-| Deployed | not yet |
+| Deployed | [`0xF9c882896424e7aA2CD71334FC8D8E95025E69C0`](https://bscscan.com/address/0xF9c882896424e7aA2CD71334FC8D8E95025E69C0), block 135274713, 23 November 2026, from commit `c9444ae` ([transaction](https://bscscan.com/tx/0xe59604d83df261a56232a3c5a4d28d7bfce929e4f179513e1b03efe1c1d84887), [record](broadcast/Deploy.s.sol/56/run-latest.json)) |
 
 ### What it can and cannot do
 
@@ -143,7 +143,16 @@ changed or documented.
 
 ## Deploy
 
-The signer is chosen on the command line; nothing reads a private key from a file.
+The board on BNB Chain was deployed with [Hatchway](https://github.com/successaje/hatchway),
+which runs this script with a browser wallet as the signer: the deploying wallet approved the
+one transaction in MetaMask after reviewing it, and no private key was read or imported. The
+deploying wallet has no powers over the board.
+
+```bash
+npx hatchway forge script/Deploy.s.sol:Deploy --rpc-url https://bsc-rpc.publicnode.com --broadcast
+```
+
+Without Hatchway, the signer is chosen on the command line; nothing reads a private key from a file.
 
 ```bash
 forge script script/Deploy.s.sol --rpc-url bsc --account <keystore> --broadcast \

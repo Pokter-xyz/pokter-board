@@ -18,3 +18,6 @@ docs/
 .env
 .env.*
 !.env.example
+
+# Hatchway's local run records and session state
+.hatchway/
